@@ -1,0 +1,365 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Achats du jour — suivi & marquage</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>🛒</text></svg>">
+
+  <!-- Tailwind CSS (CDN) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Icônes Lucide (CDN) -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <script>
+    window.APP_CONFIG = {
+      currency: "{{ currency|escapejs }}",
+      poll: {{ poll_interval }},
+      today: "{{ today|date:'Y-m-d' }}"
+    };
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Segoe UI"', 'system-ui', '-apple-system', 'Roboto', 'sans-serif']
+          }
+        }
+      }
+    };
+  </script>
+
+  <style>
+    /* États des lignes + petits éléments que Tailwind ne couvre pas ici */
+    .row.is-done { background-color: #ecfdf5; border-color: #a7f3d0; }
+    .row.is-done .row-name { color: #047857; }
+    .row.is-off { opacity: .55; }
+    .row.is-off .row-name { text-decoration: line-through; text-decoration-color: #94a3b8; }
+
+    dialog {
+      border: 0; border-radius: 1rem; padding: 0;
+      width: min(460px, calc(100vw - 32px));
+      background: #fff; color: #0f172a;
+      box-shadow: 0 30px 70px rgba(15, 23, 42, .35);
+    }
+    dialog::backdrop { background: rgba(15, 23, 42, .55); backdrop-filter: blur(3px); }
+
+    .toast { animation: toast-in .2s ease-out; }
+    @keyframes toast-in { from { transform: translateY(12px); opacity: 0; } }
+
+    .history-scroll { scrollbar-width: thin; }
+    .history-scroll::-webkit-scrollbar { height: 8px; }
+    .history-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 999px; }
+  </style>
+</head>
+<body class="min-h-screen bg-slate-100 font-sans text-slate-900 antialiased">
+  {% csrf_token %}
+
+  <!-- ======================= En-tête ======================= -->
+  <header class="sticky top-0 z-30 border-b border-slate-200 bg-white/90 backdrop-blur">
+    <div class="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6">
+      <div class="flex items-center gap-3">
+        <span class="grid h-11 w-11 place-items-center rounded-xl bg-indigo-50 text-indigo-600">
+          <i data-lucide="shopping-cart" class="h-6 w-6"></i>
+        </span>
+        <div>
+          <h1 class="text-lg font-bold leading-tight">Achats du jour</h1>
+          <p class="text-xs text-slate-500">Articles, prix &amp; marquage quotidien</p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <button id="prev-day" type="button" title="Jour précédent" aria-label="Jour précédent"
+                class="grid h-9 w-9 place-items-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:border-indigo-500 hover:text-indigo-600">
+          <i data-lucide="chevron-left" class="h-4 w-4"></i>
+        </button>
+        <input type="date" id="date-input"
+               class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none transition focus:border-indigo-500 focus:bg-white">
+        <button id="next-day" type="button" title="Jour suivant" aria-label="Jour suivant"
+                class="grid h-9 w-9 place-items-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:border-indigo-500 hover:text-indigo-600">
+          <i data-lucide="chevron-right" class="h-4 w-4"></i>
+        </button>
+        <button id="today-btn" type="button"
+                class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 transition hover:border-indigo-500 hover:text-indigo-600">
+          Aujourd'hui
+        </button>
+
+        <span class="hidden items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 text-xs font-medium text-slate-500 sm:flex"
+              title="Connecté en tant que {{ request.user.username }}">
+          <i data-lucide="user" class="h-3.5 w-3.5"></i>{{ request.user.username }}
+        </span>
+        <form method="post" action="{% url 'achats:logout' %}">
+          {% csrf_token %}
+          <button type="submit" title="Se déconnecter" aria-label="Se déconnecter"
+                  class="grid h-9 w-9 place-items-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:border-red-500 hover:text-red-500">
+            <i data-lucide="log-out" class="h-4 w-4"></i>
+          </button>
+        </form>
+      </div>
+    </div>
+  </header>
+
+  <main class="mx-auto max-w-6xl space-y-5 px-4 py-6 sm:px-6">
+
+    <!-- ======================= Résumé ======================= -->
+    <section class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6" aria-label="Résumé du jour">
+      <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <p class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Articles</p>
+        <p id="sum-count" class="mt-1 text-2xl font-bold">–</p>
+        <p id="sum-active" class="text-xs text-slate-400"></p>
+      </div>
+      <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <p class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">À faire</p>
+        <p id="sum-todo" class="mt-1 text-2xl font-bold text-amber-500">–</p>
+        <p class="text-xs text-slate-400">marquage restant</p>
+      </div>
+      <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <p class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Faits</p>
+        <p id="sum-done" class="mt-1 text-2xl font-bold text-emerald-600">–</p>
+        <p class="text-xs text-slate-400">marqués ce jour</p>
+      </div>
+      <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <p class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Total prévu</p>
+        <p id="sum-planned" class="mt-1 text-2xl font-bold">–</p>
+        <p class="text-xs text-slate-400">sélection affichée</p>
+      </div>
+      <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <p class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Dépensé</p>
+        <p id="sum-spent" class="mt-1 text-2xl font-bold text-indigo-600">–</p>
+        <p class="text-xs text-slate-400">articles marqués</p>
+      </div>
+      <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <p class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Reste</p>
+        <p id="sum-remaining" class="mt-1 text-2xl font-bold">–</p>
+        <p class="text-xs text-slate-400">prévu − dépensé</p>
+      </div>
+    </section>
+
+    <!-- ======================= Filtres ======================= -->
+    <section class="flex flex-wrap items-center gap-2 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm" aria-label="Filtres">
+      <div class="relative min-w-[190px] flex-1">
+        <i data-lucide="search" class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"></i>
+        <input type="search" id="f-q" autocomplete="off"
+               placeholder="Rechercher un article… (touche /)"
+               class="w-full rounded-lg border border-slate-200 bg-slate-50 py-2 pl-9 pr-3 text-sm outline-none transition placeholder:text-slate-400 focus:border-indigo-500 focus:bg-white">
+      </div>
+
+      <select id="f-category" aria-label="Catégorie"
+              class="max-w-[190px] rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-indigo-500 focus:bg-white">
+        <option value="">Toutes catégories</option>
+      </select>
+
+      <select id="f-status" aria-label="État du marquage"
+              class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-indigo-500 focus:bg-white">
+        <option value="">Tout l'état</option>
+        <option value="todo">À faire</option>
+        <option value="done">Déjà fait</option>
+      </select>
+
+      <div class="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2" role="group" aria-label="Fourchette de prix">
+        <input type="text" inputmode="decimal" id="f-min" autocomplete="off" placeholder="Prix min"
+               class="w-[70px] bg-transparent text-sm outline-none placeholder:text-slate-400">
+        <span class="text-slate-400">–</span>
+        <input type="text" inputmode="decimal" id="f-max" autocomplete="off" placeholder="Prix max"
+               class="w-[70px] bg-transparent text-sm outline-none placeholder:text-slate-400">
+        <span class="text-xs font-medium text-slate-400">{{ currency }}</span>
+      </div>
+
+      <select id="f-order" aria-label="Tri"
+              class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-indigo-500 focus:bg-white">
+        <option value="name">Nom A → Z</option>
+        <option value="-name">Nom Z → A</option>
+        <option value="price">Prix croissant</option>
+        <option value="-price">Prix décroissant</option>
+        <option value="category">Catégorie</option>
+        <option value="recent">Plus récents</option>
+      </select>
+
+      <label class="flex cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600 transition hover:border-indigo-500"
+             title="Inclure les articles désactivés">
+        <input type="checkbox" id="f-inactive" class="h-4 w-4 accent-indigo-600"> Inactifs
+      </label>
+
+      <button id="clear-filters" type="button" title="Réinitialiser tous les filtres"
+              class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 transition hover:border-indigo-500 hover:text-indigo-600">
+        Réinit.
+      </button>
+
+      <button id="add-cat-btn" type="button"
+              class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 transition hover:border-indigo-500 hover:text-indigo-600">
+        <i data-lucide="folder-plus" class="h-4 w-4"></i> Catégorie
+      </button>
+
+      <button id="add-btn" type="button"
+              class="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-500">
+        <i data-lucide="plus" class="h-4 w-4"></i> Nouvel article
+      </button>
+    </section>
+
+    <!-- ======================= Liste ======================= -->
+    <section class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
+        <h2 id="day-title" class="text-[15px] font-semibold">Liste du jour</h2>
+        <div class="flex flex-wrap items-center gap-2">
+          <span id="result-info" class="text-xs text-slate-500"></span>
+          <button id="check-all" type="button" title="Marquer tous les articles affichés comme faits"
+                  class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:border-emerald-500 hover:text-emerald-600 disabled:cursor-not-allowed disabled:opacity-40">
+            <i data-lucide="check-check" class="h-3.5 w-3.5"></i> Tout marquer
+          </button>
+          <button id="uncheck-all" type="button" title="Décocher tous les articles affichés"
+                  class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:border-slate-400 disabled:cursor-not-allowed disabled:opacity-40">
+            <i data-lucide="x" class="h-3.5 w-3.5"></i> Tout décocher
+          </button>
+        </div>
+      </div>
+
+      <div id="list" class="space-y-1 p-2" aria-live="polite">
+        <div class="p-10 text-center text-sm text-slate-400">Chargement…</div>
+      </div>
+    </section>
+
+    <!-- ======================= Historique ======================= -->
+    <section class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
+        <h2 class="flex items-center gap-2 text-[15px] font-semibold">
+          <i data-lucide="calendar-days" class="h-4 w-4 text-indigo-500"></i>
+          Historique des 30 derniers jours
+        </h2>
+        <span class="text-xs text-slate-400">cliquez sur un jour pour l'ouvrir</span>
+      </div>
+      <div id="history" class="history-scroll flex gap-2 overflow-x-auto p-4">
+        <div class="p-6 text-center text-sm text-slate-400">Chargement…</div>
+      </div>
+    </section>
+
+    <footer class="flex flex-wrap justify-between gap-2 pt-1 text-xs text-slate-500">
+      <span>Données synchronisées automatiquement toutes les {{ poll_interval }} s, sans rechargement.</span>
+      <a href="/admin/" class="font-medium text-indigo-600 hover:underline">Administration</a>
+    </footer>
+  </main>
+
+  <!-- ======================= Modale article ======================= -->
+  <dialog id="modal">
+    <form id="article-form" class="space-y-4 p-5" method="dialog" novalidate>
+      <div class="flex items-center gap-2">
+        <span class="grid h-9 w-9 place-items-center rounded-lg bg-indigo-50 text-indigo-600">
+          <i data-lucide="package" class="h-5 w-5"></i>
+        </span>
+        <h3 id="modal-title" class="text-lg font-bold">Nouvel article</h3>
+      </div>
+
+      <input type="hidden" id="a-id">
+
+      <label class="block text-xs font-semibold text-slate-500">Nom de l'article *
+        <input type="text" id="a-name" maxlength="200" required autocomplete="off"
+               placeholder="Ex. Riz, Lait, Gaz…"
+               class="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-normal text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-indigo-500 focus:bg-white">
+      </label>
+
+      <div class="grid grid-cols-2 gap-3">
+        <label class="block text-xs font-semibold text-slate-500">Prix de référence *
+          <div class="relative mt-1.5">
+            <input type="text" inputmode="decimal" id="a-price" autocomplete="off" placeholder="0"
+                   class="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 pr-12 text-sm font-normal outline-none transition focus:border-indigo-500 focus:bg-white">
+            <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">{{ currency }}</span>
+          </div>
+        </label>
+        <label class="block text-xs font-semibold text-slate-500">Unité
+          <input type="text" id="a-unit" maxlength="50" autocomplete="off" placeholder="unité, kg, sac…"
+                 class="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-normal outline-none transition placeholder:text-slate-400 focus:border-indigo-500 focus:bg-white">
+        </label>
+      </div>
+
+      <label class="block text-xs font-semibold text-slate-500">Catégorie
+        <select id="a-category"
+                class="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-normal outline-none transition focus:border-indigo-500 focus:bg-white">
+          <option value="">— Sans catégorie —</option>
+        </select>
+      </label>
+
+      <label class="block text-xs font-semibold text-slate-500">ou nouvelle catégorie
+        <input type="text" id="a-new-category" maxlength="100" autocomplete="off" placeholder="Ex. Hygiène"
+               class="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-normal outline-none transition placeholder:text-slate-400 focus:border-indigo-500 focus:bg-white">
+      </label>
+
+      <label class="flex cursor-pointer items-center gap-2 text-sm text-slate-700">
+        <input type="checkbox" id="a-active" checked class="h-4 w-4 accent-indigo-600"> Article actif
+      </label>
+
+      <p id="form-error" class="hidden rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600"></p>
+
+      <div class="flex justify-end gap-2 pt-1">
+        <button type="button" id="modal-cancel"
+                class="rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm font-medium text-slate-600 transition hover:border-indigo-500 hover:text-indigo-600">
+          Annuler
+        </button>
+        <button type="submit" id="modal-save"
+                class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-500">
+          Enregistrer
+        </button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- ======================= Modale catégorie ======================= -->
+  <dialog id="cat-modal">
+    <form id="cat-form" class="space-y-4 p-5" method="dialog" novalidate>
+      <div class="flex items-center gap-2">
+        <span class="grid h-9 w-9 place-items-center rounded-lg bg-indigo-50 text-indigo-600">
+          <i data-lucide="folder-plus" class="h-5 w-5"></i>
+        </span>
+        <h3 class="text-lg font-bold">Nouvelle catégorie</h3>
+      </div>
+
+      <label class="block text-xs font-semibold text-slate-500">Nom de la catégorie *
+        <input type="text" id="cat-name" maxlength="100" required autocomplete="off"
+               placeholder="Ex. Épicerie, Transport, Scolarité…"
+               class="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-normal outline-none transition placeholder:text-slate-400 focus:border-indigo-500 focus:bg-white">
+      </label>
+
+      <p id="cat-error" class="hidden rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600"></p>
+
+      <div class="flex justify-end gap-2 pt-1">
+        <button type="button" id="cat-cancel"
+                class="rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm font-medium text-slate-600 transition hover:border-indigo-500 hover:text-indigo-600">
+          Annuler
+        </button>
+        <button type="submit"
+                class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-500">
+          Créer
+        </button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- ======================= Modale de confirmation ======================= -->
+  <dialog id="confirm-modal" aria-labelledby="confirm-title">
+    <form id="confirm-form" class="space-y-4 p-5" method="dialog" novalidate>
+      <div class="flex items-start gap-3">
+        <span class="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-red-50 text-red-600">
+          <i data-lucide="alert-triangle" class="h-5 w-5"></i>
+        </span>
+        <div class="min-w-0">
+          <h3 id="confirm-title" class="text-lg font-bold">Supprimer cet article ?</h3>
+          <p id="confirm-message" class="mt-1 text-sm text-slate-600"></p>
+        </div>
+      </div>
+
+      <div class="flex justify-end gap-2 pt-1">
+        <button type="button" id="confirm-cancel" data-autofocus
+                class="rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm font-medium text-slate-600 transition hover:border-indigo-500 hover:text-indigo-600">
+          Annuler
+        </button>
+        <button type="submit" id="confirm-ok"
+                class="inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-red-500">
+          <i data-lucide="trash-2" class="h-4 w-4"></i> Supprimer
+        </button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toasts" class="fixed bottom-5 right-5 z-50 space-y-2"></div>
+
+  <script src="{% static 'achats/app.js' %}"></script>
+</body>
+</html>
