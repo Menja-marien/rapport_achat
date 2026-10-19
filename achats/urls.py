@@ -23,6 +23,7 @@ urlpatterns = [
     # --- Application ------------------------------------------------------
     path("", views.home, name="home"),
     path("api/articles/", views.articles_api, name="articles-api"),
+    path("api/articles/bulk/", views.articles_bulk_api, name="articles-bulk-api"),
     path("api/articles/<int:pk>/", views.article_api, name="article-api"),
     path("api/entries/", views.entry_api, name="entry-api"),
     path("api/entries/bulk/", views.bulk_api, name="bulk-api"),

@@ -106,6 +106,18 @@ def _error(message: str, status: int = 400) -> JsonResponse:
     return JsonResponse({"error": message}, status=status)
 
 
+def _clean_ids(raw) -> list[int]:
+    """Identifiants d'articles issus de la sélection envoyée par le front."""
+    values = raw if isinstance(raw, (list, tuple, set)) else []
+    ids = []
+    for value in values:
+        try:
+            ids.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    return ids
+
+
 # ---------------------------------------------------------------------------
 # Articles : liste + création
 # ---------------------------------------------------------------------------
@@ -159,6 +171,60 @@ def article_api(request, pk):
 
 
 # ---------------------------------------------------------------------------
+# Articles : actions groupées sur une sélection
+# ---------------------------------------------------------------------------
+@api_login_required
+@require_http_methods(["POST"])
+def articles_bulk_api(request):
+    """Applique une action à plusieurs articles sélectionnés.
+
+    `action` : `set_category` (category_id vide = « Sans catégorie ») ou `delete`.
+    La suppression désactive l'article s'il a déjà un historique, sinon le supprime.
+    """
+    data = _json(request)
+    ids = _clean_ids(data.get("ids"))
+    if not ids:
+        return _error("Aucun article sélectionné.")
+
+    articles = list(Article.objects.filter(pk__in=ids))
+    if not articles:
+        return _error("Articles introuvables.")
+
+    action = str(data.get("action") or "")
+
+    if action == "set_category":
+        raw = data.get("category_id")
+        category = None
+        if raw not in (None, "", "0"):
+            try:
+                category = Category.objects.get(pk=int(raw))
+            except (TypeError, ValueError):
+                return _error("Catégorie invalide.")
+            except Category.DoesNotExist:
+                return _error("Catégorie introuvable.")
+        for article in articles:
+            article.category = category
+            article.save(update_fields=["category", "updated_at"])
+        return JsonResponse(services.build_payload(request.GET))
+
+    if action == "delete":
+        deleted = disabled = 0
+        for article in articles:
+            if article.entries.exists():
+                article.is_active = False
+                article.save(update_fields=["is_active", "updated_at"])
+                disabled += 1
+            else:
+                article.delete()
+                deleted += 1
+        payload = services.build_payload(request.GET)
+        payload["bulk"] = {"deleted": deleted, "disabled": disabled}
+        return JsonResponse(payload)
+
+    return _error("Action groupée inconnue.")
+
+
+# ---------------------------------------------------------------------------
 # Marquage quotidien
 # ---------------------------------------------------------------------------
 @api_login_required
@@ -201,32 +267,39 @@ def entry_api(request):
 @api_login_required
 @require_http_methods(["POST"])
 def bulk_api(request):
-    """Marque / démarque d'un coup tous les articles affichés du jour."""
+    """Marque / démarque d'un coup une sélection, sinon tous les articles affichés."""
     data = _json(request)
     day = services.parse_date(data.get("date")) or timezone.localdate()
     done = bool(data.get("done"))
 
-    rows, _day, _filters = services.filter_articles(request.GET)
-    ids = [r["id"] for r in rows]
-    if ids:
-        entries = {
-            e.article_id: e
-            for e in DailyEntry.objects.filter(date=day, article_id__in=ids)
-        }
-        to_create, to_update = [], []
-        for article_id in ids:
-            entry = entries.get(article_id)
-            if entry is None:
-                to_create.append(
-                    DailyEntry(article_id=article_id, date=day, done=done, quantity=1)
-                )
-            elif entry.done != done:
-                entry.done = done
-                to_update.append(entry)
-        if to_create:
-            DailyEntry.objects.bulk_create(to_create, ignore_conflicts=True)
-        if to_update:
-            DailyEntry.objects.bulk_update(to_update, ["done"])
+    # `ids` = sélection explicite du front ; absent = tout l'affichage courant.
+    if "ids" in data:
+        ids = _clean_ids(data.get("ids"))
+    else:
+        rows, _day, _filters = services.filter_articles(request.GET)
+        ids = [r["id"] for r in rows]
+
+    if not ids:
+        return _error("Aucun article sélectionné.")
+
+    entries = {
+        e.article_id: e
+        for e in DailyEntry.objects.filter(date=day, article_id__in=ids)
+    }
+    to_create, to_update = [], []
+    for article_id in ids:
+        entry = entries.get(article_id)
+        if entry is None:
+            to_create.append(
+                DailyEntry(article_id=article_id, date=day, done=done, quantity=1)
+            )
+        elif entry.done != done:
+            entry.done = done
+            to_update.append(entry)
+    if to_create:
+        DailyEntry.objects.bulk_create(to_create, ignore_conflicts=True)
+    if to_update:
+        DailyEntry.objects.bulk_update(to_update, ["done"])
 
     return JsonResponse(services.build_payload(request.GET))
 

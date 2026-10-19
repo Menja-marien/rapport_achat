@@ -25,6 +25,7 @@ faite dans un autre onglet / par un autre utilisateur apparaît donc en direct.
 | **Historique** | 30 derniers jours cliquables avec le total dépensé |
 | **URL filtrable** | les filtres sont dans la barre d'adresse (partage / favoris) |
 | **Temps réel** | polling silencieux (5 s par défaut) : aucune interruption d'une saisie en cours, aucun rechargement de page |
+| **Sélection multiple** | case sur chaque ligne + case par catégorie (et « tout sélectionner ») : la barre flottante permet de **marquer fait**, **décocher**, **changer de catégorie** ou **supprimer** d'un coup ; `Échap` vide la sélection |
 | **Accès protégé** | page et API réservées aux utilisateurs connectés (`/connexion/`), création de compte ouverte sur `/inscription/`, déconnexion depuis l'en-tête |
 | **Interface** | **Tailwind CSS (CDN)** + icônes **Lucide (CDN)** — même jeu d'icônes que `lucide-react` (la page étant en Django/JS natif, c'est l'API `lucide.createIcons()` qui est utilisée) |
 | **Administration** | `/admin/` (CRUD complet + historique) |
@@ -84,7 +85,7 @@ achats/
 ├── views.py             # page + API JSON (accès protégé)
 ├── urls.py
 ├── admin.py
-├── tests.py             # 38 tests
+├── tests.py             # 47 tests
 ├── management/commands/demo.py
 ├── templates/achats/home.html
 ├── templates/registration/   # auth_base.html, login.html, signup.html
@@ -107,8 +108,9 @@ achats/
 | `GET` | `/api/articles/?date=&q=&category=&status=&min_price=&max_price=&ordering=&inactive=` | liste + résumé + catégories (filtres côté serveur) |
 | `POST` | `/api/articles/` | créer un article |
 | `PATCH` / `DELETE` | `/api/articles/<id>/` | modifier / supprimer (désactive si historique existant) |
+| `POST` | `/api/articles/bulk/` | actions groupées : `{"action": "set_category", "category_id": 3, "ids": [1, 2]}` ou `{"action": "delete", "ids": [...]}` |
 | `POST` | `/api/entries/` | marquer / démarquer / fixer le prix d'un article pour une date |
-| `POST` | `/api/entries/bulk/` | marquer d'un coup tous les articles affichés |
+| `POST` | `/api/entries/bulk/` | marquer d'un coup les articles affichés, ou seulement `{"ids": [...]}` |
 | `GET` | `/api/history/` | totaux des 30 derniers jours |
 | `POST` | `/api/categories/` | créer une catégorie (`{"name": "…"}`) |
 

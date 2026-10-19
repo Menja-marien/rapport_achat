@@ -21,12 +21,14 @@
     max_price: "",
     ordering: "name",
     inactive: false,
+    /** Articles cochés pour les actions groupées (ids). */
+    selected: new Set(),
   };
 
   let articlesById = new Map();
   let currentCategories = [];
   let lastDataKey = null;
-  /** Suppression en attente de confirmation dans la modale. */
+  /** Suppression en attente de confirmation : {ids: [..]} (1 ou plusieurs). */
   let pendingDelete = null;
 
   /* ------------------------------------------------------------- Références */
@@ -48,6 +50,14 @@
     confirmMessage: $("#confirm-message"),
     catName: $("#cat-name"),
     catError: $("#cat-error"),
+    bulkBar: $("#bulk-bar"),
+    bulkCount: $("#bulk-count"),
+    bulkDone: $("#bulk-done"),
+    bulkUndone: $("#bulk-undone"),
+    bulkCategory: $("#bulk-category"),
+    bulkMove: $("#bulk-move"),
+    bulkDelete: $("#bulk-delete"),
+    bulkClear: $("#bulk-clear"),
     filters: {
       q: $("#f-q"),
       category: $("#f-category"),
@@ -271,6 +281,9 @@
       renderList(groups);
       restoreFocus(focus);
     }
+
+    renderBulkCategories(currentCategories);
+    syncSelectionUI(); // cases à cocher + barre d'actions groupées
   }
 
   function renderSummary(s) {
@@ -327,9 +340,108 @@
     fill(els.article.category, "— Sans catégorie —", els.article.category.value);
   }
 
+  /** Liste déroulante « Changer de catégorie » de la barre d'actions groupées. */
+  function renderBulkCategories(categories) {
+    const select = els.bulkCategory;
+    if (!select) return;
+    const wanted = select.value;
+    select.innerHTML = "";
+    const preset = [
+      ["__choose__", "Changer de catégorie…"],
+      ["", "— Sans catégorie —"],
+    ];
+    preset.forEach(([value, label]) => {
+      const o = document.createElement("option");
+      o.value = value;
+      o.textContent = label;
+      select.appendChild(o);
+    });
+    (categories || []).forEach((c) => {
+      const o = document.createElement("option");
+      o.value = String(c.id);
+      o.textContent = `${c.name} (${c.count})`;
+      select.appendChild(o);
+    });
+    select.value = [...select.options].some((o) => o.value === wanted)
+      ? wanted
+      : "__choose__";
+  }
+
+  /* ------------------------------------------------- Sélection multiple --- */
+  function setSelection(ids) {
+    state.selected = new Set((ids || []).map(Number).filter(Boolean));
+    syncSelectionUI();
+  }
+
+  function addSelection(ids) {
+    (ids || []).forEach((id) => state.selected.add(Number(id)));
+    syncSelectionUI();
+  }
+
+  function removeSelection(ids) {
+    (ids || []).forEach((id) => state.selected.delete(Number(id)));
+    syncSelectionUI();
+  }
+
+  /** Aligne les cases cochées, les en-têtes de catégorie et la barre d'actions. */
+  function syncSelectionUI() {
+    // Un article qui n'est plus affiché (filtre, suppression) sort de la sélection.
+    [...state.selected].forEach((id) => {
+      if (!articlesById.has(id)) state.selected.delete(id);
+    });
+
+    const rows = [...els.list.querySelectorAll(".row")];
+    rows.forEach((row) => {
+      const on = state.selected.has(Number(row.dataset.id));
+      row.classList.toggle("is-selected", on);
+      const box = row.querySelector(".js-select");
+      if (box) box.checked = on;
+    });
+
+    const ids = rows.map((r) => Number(r.dataset.id));
+    const head = els.list.querySelector(".js-select-all");
+    if (head) {
+      const chosen = ids.filter((id) => state.selected.has(id)).length;
+      head.checked = ids.length > 0 && chosen === ids.length;
+      head.indeterminate = chosen > 0 && chosen < ids.length;
+    }
+
+    els.list.querySelectorAll(".group").forEach((group) => {
+      const box = group.querySelector(".js-select-group");
+      if (!box) return;
+      const groupIds = (box.dataset.ids || "").split(",").map(Number).filter(Boolean);
+      const chosen = groupIds.filter((id) => state.selected.has(id)).length;
+      box.checked = groupIds.length > 0 && chosen === groupIds.length;
+      box.indeterminate = chosen > 0 && chosen < groupIds.length;
+    });
+
+    renderBulkBar();
+  }
+
+  /** Barre flottante d'actions groupées (masquée sans sélection). */
+  function renderBulkBar() {
+    if (!els.bulkBar) return;
+    const n = state.selected.size;
+    els.bulkBar.classList.toggle("hidden", n === 0);
+    if (n === 0) return;
+    els.bulkCount.textContent = `${n} article(s) sélectionné(s)`;
+    els.bulkMove.disabled = els.bulkCategory.value === "__choose__";
+  }
+
+  /** Action groupée côté serveur puis rafraîchissement de l'affichage. */
+  async function bulkArticles(action, ids, extra = {}) {
+    return mutate(`/api/articles/bulk/?${queryString()}`, {
+      action,
+      ids,
+      ...extra,
+    });
+  }
+
   /* --------------------------------------------------------------- Lignes */
   const CHECKBOX =
     "flex h-5 w-5 shrink-0 items-center justify-center accent-emerald-600";
+  const SELECT_BOX =
+    "h-4 w-4 shrink-0 cursor-pointer accent-indigo-600";
   const QTY_INPUT =
     "h-8 w-14 rounded-md border border-slate-200 bg-white text-center text-sm outline-none transition focus:border-indigo-500";
   const PRICE_INPUT =
@@ -342,12 +454,17 @@
       "row flex flex-wrap items-center gap-3 rounded-xl border px-3 py-2.5 transition sm:flex-nowrap",
       a.done ? "is-done border-emerald-200 bg-emerald-50" : "border-slate-200 bg-slate-50",
       a.is_active ? "" : "is-off",
+      state.selected.has(a.id) ? "is-selected" : "",
     ]
       .filter(Boolean)
       .join(" ");
 
     return `
       <div class="${cls}" data-id="${a.id}">
+        <input type="checkbox" class="js-select ${SELECT_BOX}" ${state.selected.has(a.id) ? "checked" : ""}
+               title="Sélectionner pour les actions groupées"
+               aria-label="Sélectionner ${esc(a.name)}">
+
         <input type="checkbox" class="js-toggle ${CHECKBOX}" ${a.done ? "checked" : ""}
                aria-label="Marquer ${esc(a.name)} comme fait">
 
@@ -393,6 +510,8 @@
 
   const LIST_HEAD = `
     <div class="hidden items-center gap-3 px-3 pb-1 pt-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400 lg:flex">
+      <input type="checkbox" class="js-select-all h-4 w-4 cursor-pointer accent-indigo-600"
+             title="Tout sélectionner (articles affichés)" aria-label="Tout sélectionner les articles affichés">
       <span class="w-5"></span>
       <span class="flex-1">Article</span>
       <span class="w-20">Qté</span>
@@ -429,6 +548,10 @@
           (g) => `
         <div class="group">
           <div class="flex items-center gap-2 px-2 pb-1 pt-3">
+            <input type="checkbox" class="js-select-group h-4 w-4 cursor-pointer accent-indigo-600"
+                   data-ids="${g.articles.map((a) => a.id).join(",")}"
+                   title="Sélectionner toute la catégorie"
+                   aria-label="Sélectionner ${esc(g.name || "Sans catégorie")}">
             <i data-lucide="${g.name ? "folder" : "inbox"}" class="h-3.5 w-3.5 text-indigo-500"></i>
             <span class="text-[11px] font-bold uppercase tracking-wider text-slate-500">${esc(g.name || "Sans catégorie")}</span>
             <span class="text-[11px] font-normal text-slate-400">· ${g.count} article(s)</span>
@@ -518,12 +641,35 @@
   }
 
   els.list.addEventListener("change", (e) => {
-    const row = e.target.closest(".row");
+    const target = e.target;
+
+    // --- Sélection multiple ---
+    if (target.classList.contains("js-select-all")) {
+      const ids = [...els.list.querySelectorAll(".row")].map((r) => Number(r.dataset.id));
+      setSelection(target.checked ? ids : []);
+      return;
+    }
+    if (target.classList.contains("js-select-group")) {
+      const ids = (target.dataset.ids || "").split(",").map(Number).filter(Boolean);
+      if (target.checked) addSelection(ids);
+      else removeSelection(ids);
+      return;
+    }
+
+    const row = target.closest(".row");
     if (!row) return;
-    if (e.target.classList.contains("js-toggle")) {
-      row.classList.toggle("is-done", e.target.checked); // rendu optimiste
+
+    if (target.classList.contains("js-select")) {
+      const id = Number(row.dataset.id);
+      if (target.checked) addSelection([id]);
+      else removeSelection([id]);
+      return;
+    }
+
+    if (target.classList.contains("js-toggle")) {
+      row.classList.toggle("is-done", target.checked); // rendu optimiste
       mutate("/api/entries/", rowPayload(row));
-    } else if (e.target.classList.contains("js-price") || e.target.classList.contains("js-qty")) {
+    } else if (target.classList.contains("js-price") || target.classList.contains("js-qty")) {
       mutate("/api/entries/", rowPayload(row));
     }
   });
@@ -551,19 +697,33 @@
   });
 
   /* ------------------------------------------- Modale de confirmation ---- */
-  /** Demande de suppression : ouvre la modale au lieu du confirm() natif. */
-  function openConfirmDelete(id) {
-    const art = articlesById.get(id);
-    pendingDelete = id;
-    els.confirmTitle.textContent = art
-      ? `Supprimer « ${art.name} » ?`
-      : "Supprimer cet article ?";
-    els.confirmMessage.textContent =
-      "Tous ses marquages journaliers (prix du jour, quantités, coches) seront " +
-      "définitivement supprimés ainsi que ses entrées passées. Cette action est irréversible.";
+  /** Message commun aux suppressions (simple ou groupée). */
+  const DELETE_NOTE =
+    "Un article sans historique est supprimé définitivement ; un article déjà marqué " +
+    "les jours précédents est seulement désactivé (son historique est conservé).";
+
+  function showConfirm(title, message, ids) {
+    pendingDelete = { ids: ids.slice() };
+    els.confirmTitle.textContent = title;
+    els.confirmMessage.textContent = message;
     els.confirmModal.showModal();
     // Le focus démarre sur « Annuler » : la touche Entrée ne supprime pas.
     $("#confirm-cancel").focus();
+  }
+
+  /** Suppression d'un article : ouvre la modale au lieu du confirm() natif. */
+  function openConfirmDelete(id) {
+    const art = articlesById.get(id);
+    showConfirm(
+      art ? `Supprimer « ${art.name} » ?` : "Supprimer cet article ?",
+      DELETE_NOTE,
+      [id]
+    );
+  }
+
+  /** Suppression groupée de la sélection courante. */
+  function openConfirmBulkDelete(ids) {
+    showConfirm(`Supprimer ${ids.length} article(s) ?`, DELETE_NOTE, ids);
   }
 
   function closeConfirm() {
@@ -581,11 +741,24 @@
 
   els.confirmForm.addEventListener("submit", (e) => {
     e.preventDefault();
-    const id = pendingDelete;
+    const pending = pendingDelete;
     closeConfirm();
-    if (id !== null) {
-      mutate(`/api/articles/${id}/?${queryString()}`, undefined, "DELETE");
+    if (!pending || pending.ids.length === 0) return;
+
+    if (pending.ids.length === 1) {
+      mutate(`/api/articles/${pending.ids[0]}/?${queryString()}`, undefined, "DELETE");
+      return;
     }
+
+    bulkArticles("delete", pending.ids).then((data) => {
+      if (!data) return;
+      setSelection([]);
+      const b = data.bulk || {};
+      toast(
+        `${b.deleted || 0} supprimé(s), ${b.disabled || 0} désactivé(s) (historique conservé).`,
+        "ok"
+      );
+    });
   });
 
   /* ----------------------------------------------------------- Marquages */
@@ -611,6 +784,49 @@
   $("#uncheck-all").addEventListener("click", () =>
     mutate(`/api/entries/bulk/?${queryString()}`, { date: state.date, done: false })
   );
+
+  /* ------------------------------------ Actions groupées sur la sélection */
+  if (els.bulkBar) {
+    els.bulkDone.addEventListener("click", () => {
+      const ids = [...state.selected];
+      if (!ids.length) return;
+      mutate(`/api/entries/bulk/?${queryString()}`, { date: state.date, done: true, ids }).then(
+        (data) => data && toast(`${ids.length} article(s) marqué(s) comme fait(s).`, "ok")
+      );
+    });
+
+    els.bulkUndone.addEventListener("click", () => {
+      const ids = [...state.selected];
+      if (!ids.length) return;
+      mutate(`/api/entries/bulk/?${queryString()}`, { date: state.date, done: false, ids }).then(
+        (data) => data && toast(`${ids.length} marquage(s) retiré(s).`, "ok")
+      );
+    });
+
+    els.bulkMove.addEventListener("click", () => {
+      const ids = [...state.selected];
+      const value = els.bulkCategory.value;
+      if (!ids.length || value === "__choose__") return;
+      const cat = currentCategories.find((c) => String(c.id) === value);
+      bulkArticles("set_category", ids, { category_id: value }).then(
+        (data) =>
+          data &&
+          toast(
+            `${ids.length} article(s) rangé(s) dans « ${cat ? cat.name : "Sans catégorie"} ».`,
+            "ok"
+          )
+      );
+    });
+
+    els.bulkCategory.addEventListener("change", renderBulkBar);
+
+    els.bulkDelete.addEventListener("click", () => {
+      const ids = [...state.selected];
+      if (ids.length) openConfirmBulkDelete(ids);
+    });
+
+    els.bulkClear.addEventListener("click", () => setSelection([]));
+  }
 
   /* ------------------------------------------------------------- Filtres */
   let debounce;
@@ -773,6 +989,11 @@
     if (e.key === "/" && !/INPUT|SELECT|TEXTAREA/.test(tag)) {
       e.preventDefault();
       els.filters.q.focus();
+      return;
+    }
+    // Échap : vide la sélection (sauf si une modale est ouverte).
+    if (e.key === "Escape" && state.selected.size && !document.querySelector("dialog[open]")) {
+      setSelection([]);
     }
   });
 

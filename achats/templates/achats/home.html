@@ -35,6 +35,7 @@
     .row.is-done .row-name { color: #047857; }
     .row.is-off { opacity: .55; }
     .row.is-off .row-name { text-decoration: line-through; text-decoration-color: #94a3b8; }
+    .row.is-selected { box-shadow: inset 0 0 0 2px #6366f1; }
 
     dialog {
       border: 0; border-radius: 1rem; padding: 0;
@@ -46,6 +47,8 @@
 
     .toast { animation: toast-in .2s ease-out; }
     @keyframes toast-in { from { transform: translateY(12px); opacity: 0; } }
+
+    #bulk-bar { animation: toast-in .18s ease-out; }
 
     .history-scroll { scrollbar-width: thin; }
     .history-scroll::-webkit-scrollbar { height: 8px; }
@@ -237,6 +240,48 @@
       <a href="/admin/" class="font-medium text-indigo-600 hover:underline">Administration</a>
     </footer>
   </main>
+
+  <!-- ======================= Barre d'actions groupées ======================= -->
+  <div id="bulk-bar" class="fixed inset-x-0 bottom-4 z-40 hidden px-4">
+    <div class="mx-auto flex max-w-3xl flex-wrap items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white/95 p-2.5 shadow-xl backdrop-blur">
+      <span class="inline-flex items-center gap-1.5 rounded-lg bg-indigo-50 px-2.5 py-1.5 text-xs font-semibold text-indigo-700">
+        <i data-lucide="check-square" class="h-3.5 w-3.5"></i>
+        <span id="bulk-count">0 article(s) sélectionné(s)</span>
+      </span>
+
+      <button id="bulk-done" type="button" title="Marquer les articles sélectionnés comme faits"
+              class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:border-emerald-500 hover:text-emerald-600">
+        <i data-lucide="check" class="h-4 w-4"></i> Marquer fait
+      </button>
+
+      <button id="bulk-undone" type="button" title="Retirer le marquage des articles sélectionnés"
+              class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:border-slate-400">
+        <i data-lucide="undo-2" class="h-4 w-4"></i> Décocher
+      </button>
+
+      <div class="flex items-center gap-1.5">
+        <select id="bulk-category" aria-label="Catégorie cible"
+                class="max-w-[190px] rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-sm text-slate-700 outline-none transition focus:border-indigo-500 focus:bg-white">
+          <option value="__choose__">Changer de catégorie…</option>
+          <option value="">— Sans catégorie —</option>
+        </select>
+        <button id="bulk-move" type="button" title="Ranger les articles sélectionnés dans cette catégorie" disabled
+                class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:border-indigo-500 hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-40">
+          <i data-lucide="folder-input" class="h-4 w-4"></i> Appliquer
+        </button>
+      </div>
+
+      <button id="bulk-delete" type="button" title="Supprimer les articles sélectionnés"
+              class="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-3 py-1.5 text-sm font-medium text-red-600 transition hover:border-red-500 hover:bg-red-50">
+        <i data-lucide="trash-2" class="h-4 w-4"></i> Supprimer
+      </button>
+
+      <button id="bulk-clear" type="button" title="Tout désélectionner (Échap)" aria-label="Tout désélectionner"
+              class="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:border-slate-400 hover:text-slate-700">
+        <i data-lucide="x" class="h-4 w-4"></i>
+      </button>
+    </div>
+  </div>
 
   <!-- ======================= Modale article ======================= -->
   <dialog id="modal">

@@ -233,6 +233,111 @@ class CategoryApiTests(AuthedTestCase):
         self.assertEqual(art.category.name, "Maison")
 
 
+class BulkTests(AuthedTestCase):
+    """Sélection multiple : marquage, changement de catégorie et suppression."""
+
+    def setUp(self):
+        super().setUp()
+        self.alim = Category.objects.create(name="Alimentation")
+        self.hygiene = Category.objects.create(name="Hygiène")
+        self.riz = Article.objects.create(name="Riz", base_price=1000, category=self.alim)
+        self.savon = Article.objects.create(name="Savon", base_price=500, category=self.alim)
+        self.lait = Article.objects.create(name="Lait", base_price=800, category=self.alim)
+        self.cafe = Article.objects.create(name="Café", base_price=2000, category=self.hygiene)
+
+    def post(self, view, payload):
+        return self.client.post(
+            reverse(f"achats:{view}"), payload, content_type="application/json"
+        )
+
+    def test_marquage_de_la_selection_seulement(self):
+        res = self.post(
+            "bulk-api",
+            {"date": "2026-10-19", "done": True, "ids": [self.riz.id, self.cafe.id]},
+        )
+        self.assertEqual(res.status_code, 200)
+        faits = set(
+            DailyEntry.objects.filter(done=True).values_list("article__name", flat=True)
+        )
+        self.assertEqual(faits, {"Riz", "Café"})
+
+    def test_marquage_retire_la_coche(self):
+        DailyEntry.objects.create(article=self.riz, date=date(2026, 10, 19), done=True)
+        res = self.post(
+            "bulk-api", {"date": "2026-10-19", "done": False, "ids": [self.riz.id]}
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertFalse(
+            DailyEntry.objects.get(article=self.riz, date=date(2026, 10, 19)).done
+        )
+
+    def test_marquage_sans_selection_refuse(self):
+        res = self.post("bulk-api", {"date": "2026-10-19", "done": True, "ids": []})
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("error", res.json())
+        self.assertEqual(DailyEntry.objects.count(), 0)
+
+    def test_changer_categorie_de_la_selection(self):
+        res = self.post(
+            "articles-bulk-api",
+            {
+                "action": "set_category",
+                "category_id": self.hygiene.id,
+                "ids": [self.riz.id, self.savon.id],
+            },
+        )
+        self.assertEqual(res.status_code, 200)
+        self.riz.refresh_from_db()
+        self.savon.refresh_from_db()
+        self.lait.refresh_from_db()
+        self.assertEqual(self.riz.category, self.hygiene)
+        self.assertEqual(self.savon.category, self.hygiene)
+        self.assertEqual(self.lait.category, self.alim)  # hors sélection : inchangé
+
+    def test_retirer_la_categorie(self):
+        res = self.post(
+            "articles-bulk-api",
+            {"action": "set_category", "category_id": "", "ids": [self.riz.id]},
+        )
+        self.assertEqual(res.status_code, 200)
+        self.riz.refresh_from_db()
+        self.assertIsNone(self.riz.category)
+
+    def test_categorie_introuvable(self):
+        res = self.post(
+            "articles-bulk-api",
+            {"action": "set_category", "category_id": 99999, "ids": [self.riz.id]},
+        )
+        self.assertEqual(res.status_code, 400)
+        self.riz.refresh_from_db()
+        self.assertEqual(self.riz.category, self.alim)
+
+    def test_suppression_groupee_avec_et_sans_historique(self):
+        DailyEntry.objects.create(article=self.riz, date=date(2026, 10, 19), done=True)
+        res = self.post(
+            "articles-bulk-api",
+            {"action": "delete", "ids": [self.riz.id, self.savon.id]},
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["bulk"], {"deleted": 1, "disabled": 1})
+        self.riz.refresh_from_db()
+        self.assertFalse(self.riz.is_active)  # a un historique → désactivé
+        self.assertFalse(Article.objects.filter(pk=self.savon.pk).exists())  # supprimé
+        self.assertTrue(Article.objects.filter(pk=self.lait.pk).exists())  # hors sélection
+
+    def test_action_inconnue(self):
+        res = self.post(
+            "articles-bulk-api", {"action": "tout-brûler", "ids": [self.riz.id]}
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("error", res.json())
+
+    def test_selection_vide(self):
+        res = self.post("articles-bulk-api", {"action": "delete", "ids": []})
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(Article.objects.count(), 4)
+
+
 class PageTests(AuthedTestCase):
     def test_page_principale(self):
         res = self.client.get(reverse("achats:home"))
@@ -257,7 +362,7 @@ class AuthTests(TestCase):
         self.assertIn(f"next={reverse('achats:home')}", res["Location"])
 
     def test_api_refuse_sans_connexion(self):
-        for name in ("articles-api", "history-api"):
+        for name in ("articles-api", "articles-bulk-api", "bulk-api", "history-api"):
             with self.subTest(api=name):
                 res = self.client.get(reverse(f"achats:{name}"))
                 self.assertEqual(res.status_code, 401)
