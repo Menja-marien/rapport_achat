@@ -6,9 +6,9 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # ⚠️ À changer impérativement en production.
-SECRET_KEY = "django-insecure-change-me-before-deploying"
+SECRET_KEY = "d5a99cd0-d557-45ee-bcac-6117799929f2"
 
-DEBUG = True
+DEBUG = False
 
 ALLOWED_HOSTS = ["*"]
 
